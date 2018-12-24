@@ -64,14 +64,16 @@ final case class PNode(phoneme: String, entries: Set[PronounceDict]) extends Pro
   def this(leaf: PLeaf) = this("", Set(leaf))
   def this() = this("", Set.empty[PronounceDict])
 }
-final case class PRoot(nodes: Set[PNode]) extends PronounceDict
+final case class PRoot(nodes: Set[PNode]) extends PronounceDict{
+  def this() = this(Set.empty[PNode])
+}
 
 object PronounceDict {
-  def from_pronounciations(prns: Pronounciations): PronounceDict = {
-    prns.keysIterator.foldLeft[PronounceDict](new PNode())((n, k) => (k, prns(k)) :: n)
+  def empty: PronounceDict = {
+    new PRoot()
   }
 
-  def empty(): PronounceDict = {
-    new PNode()
+  def from_pronounciations(prns: Pronounciations): PronounceDict = {
+    prns.keysIterator.foldLeft[PronounceDict](empty)((n, k) => (k, prns(k)) :: n)
   }
 }
