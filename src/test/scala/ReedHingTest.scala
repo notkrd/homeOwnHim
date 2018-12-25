@@ -19,6 +19,7 @@ class ReedHingTest extends FunSuite {
                             |EHLKE  EH1 L K"""
   val test_dict_file = "test_dict.txt"
   val cmu_dict_file = "pronounce_dict.txt"
+  val dict10000_file = "10000_dict.txt"
 
   test("ReedHing.readDict") {
     val test_lines = pronounciation.ReedHing.readDict(test_dict_file)
@@ -43,8 +44,10 @@ class ReedHingTest extends FunSuite {
     val test_words = test_dict.words
     assert(test_dict == pronounciation.PronounceDict.from_pronounciations(test_words))
     assert(test_words(line9_pronounciation._1) == line9_pronounciation._2)
-//    val full_dict = pronounciation.ReedHing.processDict(cmu_dict_file)
-//    val all_words = full_dict.words
-//    assert(all_words.keys.size == 133854)
+    val tenk_dict = pronounciation.ReedHing.processDict(dict10000_file)
+    val all_words = tenk_dict.words
+    assert(all_words.keys.size == 10000)
+    assert(all_words("belched") == List("B", "EH1", "L", "CH", "T"))
+    //    println(tenk_dict.phonemes("EY1"))
   }
 }

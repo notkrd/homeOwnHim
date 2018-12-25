@@ -1,79 +1,101 @@
 package pronounciation
 
-sealed trait PronounceDict {
+import scala.annotation.tailrec
 
-  val words: Pronounciations = this match {
-    case PLeaf(wrd) => Map(wrd -> List.empty[String])
-    case PNode(ph, ents) =>
-      ents.foldLeft(Map.empty[String, List[String]])((x: Pronounciations, y: PronounceDict) => x ++ y.words).mapValues(l => ph :: l)
-    case PRoot(nds) => nds.foldLeft(Map.empty[String, List[String]])((m, n) => m ++ n.words)
+case class PronounceDict(leaves: Set[String], phonemes: Map[String, PronounceDict]) {
+
+  def addLeaf(new_leaf: String): PronounceDict = PronounceDict(leaves + new_leaf, phonemes)
+
+  def updatePhon(a_phon: String)(new_dic: PronounceDict): PronounceDict = PronounceDict(leaves, phonemes.updated(a_phon, new_dic))
+
+  @tailrec
+  final def dictAt(a_path: Pronounce): Option[PronounceDict] = a_path match {
+    case Nil => Some(this)
+    case fst :: rst => if(phonemes.contains(fst)) {
+      phonemes(fst) dictAt rst
+    }
+    else {
+      None
+    }
   }
 
-  def toPRoot: PRoot = this match {
-    case PLeaf(wrd) => throw new IllegalArgumentException("Attempted to add a word with no noise alongside it, again saturating, dangerously, silence")
-    case PNode(ph, ents) => PRoot(Set(PNode(ph, ents)))
-    case PRoot(nds) => PRoot(nds)
+  def this(leaf: String) = this(Set(leaf), Map.empty[String, PronounceDict])
+  def this(phonemes: Map[String, PronounceDict]) = this(Set.empty[String], phonemes)
+  def this() = this(Set.empty[String], Map.empty[String, PronounceDict])
 
-  }
-
-  def toPNode: PNode = this match {
-    case PLeaf(wrd) => new PNode(PLeaf(wrd))
-    case PNode(_,_) => this.asInstanceOf[PNode]
-    case PRoot(nds) => PNode("", nds.asInstanceOf[Set[PronounceDict]])
+  val words: Pronounciations = {
+    val leaf_words: Pronounciations = leaves.map((_, List.empty[String])).toMap
+    val branch_words: Pronounciations = phonemes flatMap (spd => {
+      spd._2.words mapValues (spd._1 :: _)
+    })
+    leaf_words ++ branch_words
   }
 
   def ::(pronounce: (String, Pronounce)): PronounceDict = pronounce._2 match {
-    case Nil => this match {
-      case PLeaf(wrd) => PNode("", Set[PronounceDict](this, PLeaf(pronounce._1)))
-      case PNode(ph, ents) => PNode(ph, ents + PLeaf(pronounce._1))
-      case PRoot(ns) => throw new IllegalArgumentException("Attempted to add a word that makes no noise, overloading silence, filling meaning with an endless, hopeless, hum")
-    }
-    case fst :: rest => this match {
-      case PLeaf(wrd) => PNode("", Set[PronounceDict](PLeaf(wrd), pronounce._1 -> rest :: PNode(fst, Set.empty[PronounceDict])))
-      case PNode(ph, ents) => {
-        ents foreach {
-          case PNode(ph2, ents2) => if(ph2 == fst) {
-            return PNode(ph, ents - PNode(ph2, ents2) + (pronounce._1 -> rest :: PNode(ph2, ents2)))
+    case Nil => PronounceDict(leaves + pronounce._1, phonemes)
+    case fst :: rst =>
+      PronounceDict(
+        leaves,
+        phonemes.updated(fst,
+          if (phonemes contains fst) {
+            (pronounce._1, rst) :: phonemes(fst)
           }
-          case _ => Unit
-        }
-        PNode(ph, ents + ((pronounce._1, rest) :: PNode(fst, Set.empty[PronounceDict])))
-      }
-      case PRoot(nds) => {
-        nds foreach { pn =>
-          if(pn.phoneme == fst) {
-            return PRoot(nds - PNode(pn.phoneme, pn.entries) + (pronounce._1 -> rest :: PNode(pn.phoneme, pn.entries)).toPNode)
-          }
-        }
-        PRoot(nds + ((pronounce._1, rest) :: PNode(fst, Set.empty[PronounceDict])).toPNode)
-      }
-    }
+          else {
+            (pronounce._1, rst) :: new PronounceDict()
+          }))
   }
 
-  def ++ (that: PronounceDict): PronounceDict = PronounceDict.from_pronounciations(this.words ++ that.words)
+  def ++ (that: PronounceDict): PronounceDict = PronounceDict(this.leaves ++ that.leaves, this.phonemes ++ that.phonemes)
 
-  override def toString: String = this match {
-    case PLeaf(w) => "\"" ++ w ++ "\""
-    case PNode(ph, ents) => ents.foldLeft(s"{ $ph -> ")((s, pd) => s"$s${pd.toString} ") ++ "}"
-    case PRoot(nds) => nds.foldLeft("<")(_ + _.toString) + ">"
-  }
-}
-
-final case class PLeaf(word: String) extends PronounceDict
-final case class PNode(phoneme: String, entries: Set[PronounceDict]) extends PronounceDict {
-  def this(leaf: PLeaf) = this("", Set(leaf))
-  def this() = this("", Set.empty[PronounceDict])
-}
-final case class PRoot(nodes: Set[PNode]) extends PronounceDict{
-  def this() = this(Set.empty[PNode])
+  override def toString: String = phonemes.foldLeft(leaves.foldLeft("{ ")((s, l) => s ++ "\"" ++ l ++ "\" " ))((s, spd) => s ++ spd._1 ++ " -> " ++ spd._2.toString ++ " ") ++ "}"
 }
 
 object PronounceDict {
   def empty: PronounceDict = {
-    new PRoot()
+    PronounceDict(Set.empty[String], Map.empty[String, PronounceDict])
   }
 
-  def from_pronounciations(prns: Pronounciations): PronounceDict = {
-    prns.keysIterator.foldLeft[PronounceDict](empty)((n, k) => (k, prns(k)) :: n)
+  @tailrec
+  final def propagateUpdate(new_dict: PronounceDict)(ancestors: List[(String, PronounceDict)]): PronounceDict = ancestors match {
+    case Nil => new_dict
+    case (s, pd) :: rst =>
+      propagateUpdate(pd.updatePhon(s)(new_dict))(rst)
   }
+
+  @tailrec
+  private def updateAtHelper(a_dict: PronounceDict)(a_path: Pronounce)(a_val: String)(ancestors: List[(String, PronounceDict)]): PronounceDict = a_path match {
+    case Nil => propagateUpdate(a_dict.addLeaf(a_val))(ancestors)
+    case fst :: rst =>
+      updateAtHelper(a_dict.phonemes(fst))(rst)(a_val)((fst, a_dict) :: ancestors)
+  }
+
+  def updateAt(a_dict: PronounceDict)(a_path: Pronounce)(a_val: String): PronounceDict = updateAtHelper(a_dict)(a_path)(a_val)(List.empty[(String, PronounceDict)])
+
+
+
+  @tailrec
+  private def addKeyHelper(a_dict: PronounceDict)(a_path: Pronounce)(a_key: String)(ancestors: List[(String, PronounceDict)]): PronounceDict = a_path match {
+    case Nil => propagateUpdate(a_dict.updatePhon(a_key)(new PronounceDict()))(ancestors)
+    case fst :: rst =>
+      addKeyHelper(a_dict.phonemes(fst))(rst)(a_key)((fst, a_dict) :: ancestors)
+  }
+
+  def addKey(a_dict: PronounceDict)(a_path: Pronounce)(a_val: String): PronounceDict = addKeyHelper(a_dict)(a_path)(a_val)(List.empty[(String, PronounceDict)])
+
+  @tailrec
+  final def addPronounce(a_dict: PronounceDict)(pronounce: (String, Pronounce))(curr_path: Pronounce): PronounceDict = a_dict.dictAt(curr_path) match {
+    case None => throw new IllegalArgumentException("Invalid current path")
+    case Some(d) =>
+      pronounce._2 match {
+        case Nil => updateAt(a_dict)(curr_path)(pronounce._1)
+        case fst :: rst => if (a_dict.phonemes contains fst) {
+          addPronounce(a_dict)(pronounce._1, rst)(curr_path ++ List(fst))
+        }
+        else {
+          addPronounce(addKey(a_dict)(curr_path)(fst))(pronounce._1, rst)(fst :: curr_path)
+        }
+      }
+  }
+
+  def from_pronounciations(prns: Pronounciations): PronounceDict = prns.foldRight(PronounceDict.empty)(_ :: _)
 }
